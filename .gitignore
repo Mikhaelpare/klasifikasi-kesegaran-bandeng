@@ -1,0 +1,15 @@
+# Python cache
+__pycache__/
+*.pyc
+
+# Private API Credentials (Do NOT upload to GitHub!)
+kaggle.json
+
+# Large model files from other projects/drafts to save bandwidth
+model_efficientnet_gabungan_final.keras
+model_efficientnet_tilapia_final.keras
+
+# Local virtual environments
+venv/
+.venv/
+env/

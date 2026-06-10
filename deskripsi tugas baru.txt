@@ -1,0 +1,462 @@
+# PROJECT BRIEF
+## Klasifikasi Kesegaran Ikan Tilapia Menggunakan Transfer Learning Berbasis Web
+
+---
+
+## 🎯 Tujuan Proyek
+
+Membangun sistem klasifikasi kesegaran ikan Tilapia (ikan nila) berbasis web menggunakan deep learning dengan pendekatan transfer learning. Penelitian ini membandingkan dua model (MobileNetV2 dan EfficientNetB0) untuk menentukan model terbaik yang akan digunakan pada aplikasi final.
+
+---
+
+## 📦 Dataset
+
+- **Nama:** Tilapia Fish Fresh and Non Fresh
+- **Sumber:** Kaggle — Haripriya Sanga
+- **Link:** https://www.kaggle.com/datasets/haripriyasanga/tilapia-fish-fresh-and-non-fresh-species
+- **Kelas:** Fresh / NonFresh
+- **Catatan:** Hanya menggunakan dataset ini saja (tidak digabung dengan dataset lain)
+
+---
+
+## 🗺️ Alur Lengkap (Step by Step)
+
+### FASE 1 — Persiapan Data
+
+**Step 1 — Setup environment di Google Colab:**
+```python
+from google.colab import drive
+drive.mount('/content/drive')
+```
+
+**Step 2 — Download dataset dari Kaggle:**
+```python
+# Upload kaggle.json terlebih dahulu
+from google.colab import files
+files.upload()  # pilih kaggle.json
+
+import os
+os.makedirs('/root/.kaggle', exist_ok=True)
+!cp kaggle.json /root/.kaggle/
+!chmod 600 /root/.kaggle/kaggle.json
+!kaggle datasets download -d haripriyasanga/tilapia-fish-fresh-and-non-fresh-species
+!unzip -q tilapia-fish-fresh-and-non-fresh-species.zip -d /content/tilapia
+```
+
+**Step 3 — Cek struktur dataset:**
+```python
+import os
+for root, dirs, files in os.walk('/content/tilapia'):
+    level = root.replace('/content/tilapia', '').count(os.sep)
+    if level < 3:
+        indent = ' ' * 2 * level
+        jumlah = len(files) if files else ''
+        print(f'{indent}{os.path.basename(root)}/ {jumlah}')
+```
+
+**Step 4 — Reorganisasi folder (jika perlu) menjadi Fresh/NonFresh:**
+```python
+import shutil
+
+os.makedirs('/content/data_tilapia/Fresh', exist_ok=True)
+os.makedirs('/content/data_tilapia/NonFresh', exist_ok=True)
+
+# Sesuaikan path berdasarkan hasil cek struktur di Step 3
+# Contoh:
+# shutil.copytree('/content/tilapia/fresh', '/content/data_tilapia/Fresh', dirs_exist_ok=True)
+# shutil.copytree('/content/tilapia/nonfresh', '/content/data_tilapia/NonFresh', dirs_exist_ok=True)
+
+print(f"Fresh  : {len(os.listdir('/content/data_tilapia/Fresh'))} gambar")
+print(f"NonFresh: {len(os.listdir('/content/data_tilapia/NonFresh'))} gambar")
+```
+
+**Step 5 — Simpan dataset ke Google Drive:**
+```python
+shutil.copytree('/content/data_tilapia', '/content/drive/MyDrive/tilapia_project/data_tilapia')
+print("✅ Dataset tersimpan ke Drive!")
+```
+
+---
+
+### FASE 2 — Training Model 1 (MobileNetV2)
+
+**Step 6 — Preprocessing khusus MobileNetV2:**
+```python
+import tensorflow as tf
+from tensorflow.keras.applications.mobilenet_v2 import preprocess_input as mobilenet_preprocess
+from tensorflow.keras.preprocessing.image import ImageDataGenerator
+
+datagen_mobile = ImageDataGenerator(
+    preprocessing_function=mobilenet_preprocess,
+    rotation_range=20,
+    width_shift_range=0.2,
+    height_shift_range=0.2,
+    zoom_range=0.2,
+    horizontal_flip=True,
+    brightness_range=[0.8, 1.2],
+    validation_split=0.2
+)
+
+train_mobile = datagen_mobile.flow_from_directory(
+    '/content/data_tilapia',
+    target_size=(224, 224),
+    batch_size=32,
+    class_mode='binary',
+    subset='training',
+    seed=42
+)
+
+val_mobile = datagen_mobile.flow_from_directory(
+    '/content/data_tilapia',
+    target_size=(224, 224),
+    batch_size=32,
+    class_mode='binary',
+    subset='validation',
+    seed=42
+)
+
+print("Kelas:", train_mobile.class_indices)
+print(f"Train: {train_mobile.samples} | Val: {val_mobile.samples}")
+```
+
+**Step 7 — Build & train MobileNetV2:**
+```python
+from tensorflow.keras.applications import MobileNetV2
+from tensorflow.keras.models import Model
+from tensorflow.keras.layers import Dense, GlobalAveragePooling2D, Dropout, BatchNormalization
+from tensorflow.keras.optimizers import Adam
+from tensorflow.keras.callbacks import EarlyStopping, ReduceLROnPlateau, ModelCheckpoint
+
+base_mobile = MobileNetV2(weights='imagenet', include_top=False, input_shape=(224, 224, 3))
+base_mobile.trainable = False
+
+x = base_mobile.output
+x = GlobalAveragePooling2D()(x)
+x = BatchNormalization()(x)
+x = Dropout(0.3)(x)
+x = Dense(128, activation='relu')(x)
+x = Dropout(0.2)(x)
+output = Dense(1, activation='sigmoid')(x)
+
+model_mobile = Model(inputs=base_mobile.input, outputs=output)
+model_mobile.compile(
+    optimizer=Adam(learning_rate=0.001),
+    loss='binary_crossentropy',
+    metrics=['accuracy']
+)
+
+callbacks_mobile = [
+    EarlyStopping(monitor='val_accuracy', patience=5, restore_best_weights=True, verbose=1),
+    ReduceLROnPlateau(monitor='val_loss', factor=0.5, patience=3, verbose=1),
+    ModelCheckpoint(
+        '/content/drive/MyDrive/tilapia_project/model_mobilenet_tilapia.keras',
+        monitor='val_accuracy', save_best_only=True, verbose=1
+    )
+]
+
+print("🚀 Training MobileNetV2...")
+history_mobile = model_mobile.fit(
+    train_mobile, epochs=30,
+    validation_data=val_mobile,
+    callbacks=callbacks_mobile
+)
+
+best_mobile = max(history_mobile.history['val_accuracy'])
+print(f"✅ MobileNetV2 selesai! Best val_accuracy: {best_mobile*100:.2f}%")
+```
+
+---
+
+### FASE 3 — Training Model 2 (EfficientNetB0)
+
+**Step 8 — Preprocessing khusus EfficientNetB0:**
+```python
+from tensorflow.keras.applications.efficientnet import preprocess_input as eff_preprocess
+
+datagen_eff = ImageDataGenerator(
+    preprocessing_function=eff_preprocess,
+    rotation_range=20,
+    width_shift_range=0.2,
+    height_shift_range=0.2,
+    zoom_range=0.2,
+    horizontal_flip=True,
+    brightness_range=[0.8, 1.2],
+    validation_split=0.2
+)
+
+train_eff = datagen_eff.flow_from_directory(
+    '/content/data_tilapia',
+    target_size=(224, 224),
+    batch_size=32,
+    class_mode='binary',
+    subset='training',
+    seed=42
+)
+
+val_eff = datagen_eff.flow_from_directory(
+    '/content/data_tilapia',
+    target_size=(224, 224),
+    batch_size=32,
+    class_mode='binary',
+    subset='validation',
+    seed=42
+)
+```
+
+**Step 9 — Build & train EfficientNetB0 (Phase 1):**
+```python
+from tensorflow.keras.applications import EfficientNetB0
+
+base_eff = EfficientNetB0(weights='imagenet', include_top=False, input_shape=(224, 224, 3))
+base_eff.trainable = False
+
+x = base_eff.output
+x = GlobalAveragePooling2D()(x)
+x = BatchNormalization()(x)
+x = Dropout(0.3)(x)
+x = Dense(128, activation='relu')(x)
+x = Dropout(0.2)(x)
+output = Dense(1, activation='sigmoid')(x)
+
+model_eff = Model(inputs=base_eff.input, outputs=output)
+model_eff.compile(
+    optimizer=Adam(learning_rate=0.001),
+    loss='binary_crossentropy',
+    metrics=['accuracy']
+)
+
+callbacks_eff = [
+    EarlyStopping(monitor='val_accuracy', patience=5, restore_best_weights=True, verbose=1),
+    ReduceLROnPlateau(monitor='val_loss', factor=0.5, patience=3, verbose=1),
+    ModelCheckpoint(
+        '/content/drive/MyDrive/tilapia_project/model_efficientnet_tilapia.keras',
+        monitor='val_accuracy', save_best_only=True, verbose=1
+    )
+]
+
+print("🚀 Training EfficientNetB0 Phase 1...")
+history_eff = model_eff.fit(
+    train_eff, epochs=30,
+    validation_data=val_eff,
+    callbacks=callbacks_eff
+)
+
+best_eff = max(history_eff.history['val_accuracy'])
+print(f"✅ EfficientNetB0 selesai! Best val_accuracy: {best_eff*100:.2f}%")
+```
+
+**Step 10 — Fine-tuning EfficientNetB0 (Phase 2):**
+```python
+# Buka 30 layer terakhir
+for layer in model_eff.layers[:-30]:
+    layer.trainable = False
+for layer in model_eff.layers[-30:]:
+    layer.trainable = True
+
+model_eff.compile(
+    optimizer=Adam(learning_rate=0.0001),
+    loss='binary_crossentropy',
+    metrics=['accuracy']
+)
+
+callbacks_eff2 = [
+    EarlyStopping(monitor='val_accuracy', patience=5, restore_best_weights=True, verbose=1),
+    ModelCheckpoint(
+        '/content/drive/MyDrive/tilapia_project/model_efficientnet_tilapia_final.keras',
+        monitor='val_accuracy', save_best_only=True, verbose=1
+    )
+]
+
+print("🚀 Fine-tuning EfficientNetB0 Phase 2...")
+history_eff2 = model_eff.fit(
+    train_eff, epochs=15,
+    validation_data=val_eff,
+    callbacks=callbacks_eff2
+)
+
+best_eff2 = max(history_eff2.history['val_accuracy'])
+print(f"✅ Fine-tuning selesai! Best val_accuracy: {best_eff2*100:.2f}%")
+```
+
+---
+
+### FASE 4 — Evaluasi & Perbandingan
+
+**Step 11 — Evaluasi kedua model:**
+```python
+from sklearn.metrics import classification_report, confusion_matrix
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+# Evaluasi langsung
+loss_m, acc_m = model_mobile.evaluate(val_mobile, verbose=0)
+loss_e, acc_e = model_eff.evaluate(val_eff, verbose=0)
+
+print("=" * 55)
+print(f"{'Model':<25} {'Accuracy':>10} {'Loss':>10}")
+print("=" * 55)
+print(f"{'MobileNetV2':<25} {acc_m*100:>9.2f}% {loss_m:>10.4f}")
+print(f"{'EfficientNetB0':<25} {acc_e*100:>9.2f}% {loss_e:>10.4f}")
+print("=" * 55)
+
+# Tentukan model terbaik
+if acc_e >= acc_m:
+    best_model = model_eff
+    best_name = "EfficientNetB0"
+    best_gen = val_eff
+else:
+    best_model = model_mobile
+    best_name = "MobileNetV2"
+    best_gen = val_mobile
+
+print(f"\n🏆 Model terbaik: {best_name}")
+```
+
+**Step 12 — Confusion matrix model terbaik:**
+```python
+best_gen.reset()
+y_pred = (best_model.predict(best_gen) > 0.5).astype(int).flatten()
+y_true = best_gen.classes[:len(y_pred)]
+
+print(f"\n📊 Classification Report — {best_name}:")
+print(classification_report(y_true, y_pred, target_names=['Fresh', 'NonFresh']))
+
+cm = confusion_matrix(y_true, y_pred)
+plt.figure(figsize=(8, 6))
+sns.heatmap(cm, annot=True, fmt='d', cmap='Blues',
+            xticklabels=['Fresh', 'NonFresh'],
+            yticklabels=['Fresh', 'NonFresh'])
+plt.title(f'Confusion Matrix — {best_name}', fontsize=14, fontweight='bold')
+plt.ylabel('Label Asli')
+plt.xlabel('Prediksi Model')
+plt.tight_layout()
+plt.savefig('/content/drive/MyDrive/tilapia_project/confusion_matrix_best.png', dpi=150)
+plt.show()
+print("✅ Confusion matrix tersimpan ke Drive!")
+```
+
+**Step 13 — Grafik perbandingan akurasi:**
+```python
+models = ['MobileNetV2', 'EfficientNetB0']
+accs = [acc_m * 100, acc_e * 100]
+colors = ['#378ADD', '#1D9E75']
+
+plt.figure(figsize=(8, 5))
+bars = plt.bar(models, accs, color=colors, width=0.4, edgecolor='white')
+plt.ylim(min(accs) - 2, 101)
+plt.ylabel('Akurasi (%)')
+plt.title('Perbandingan Akurasi — Dataset Tilapia')
+plt.grid(axis='y', alpha=0.3)
+for bar, acc in zip(bars, accs):
+    plt.text(bar.get_x() + bar.get_width()/2,
+             bar.get_height() + 0.2,
+             f'{acc:.2f}%', ha='center', fontsize=12, fontweight='bold')
+plt.tight_layout()
+plt.savefig('/content/drive/MyDrive/tilapia_project/perbandingan_model_tilapia.png', dpi=150)
+plt.show()
+print("✅ Grafik tersimpan ke Drive!")
+```
+
+---
+
+### FASE 5 — Download Model Final
+
+**Step 14 — Download model terbaik ke laptop:**
+```python
+from google.colab import files
+
+if best_name == "EfficientNetB0":
+    files.download('/content/drive/MyDrive/tilapia_project/model_efficientnet_tilapia_final.keras')
+else:
+    files.download('/content/drive/MyDrive/tilapia_project/model_mobilenet_tilapia.keras')
+
+files.download('/content/drive/MyDrive/tilapia_project/confusion_matrix_best.png')
+files.download('/content/drive/MyDrive/tilapia_project/perbandingan_model_tilapia.png')
+print("✅ Semua file berhasil didownload!")
+```
+
+---
+
+## 📝 Dokumentasi yang Harus Dicatat
+
+Setelah setiap fase selesai, catat hasil berikut:
+
+| Item | MobileNetV2 | EfficientNetB0 |
+|------|-------------|----------------|
+| Val Accuracy | ... % | ... % |
+| Loss | ... | ... |
+| Epoch konvergen | ... | ... |
+| Ukuran model | ~11 MB | ~20 MB |
+| Precision | ... | ... |
+| Recall | ... | ... |
+| F1-Score | ... | ... |
+
+---
+
+## 📌 Judul Fleksibel (sesuaikan dengan model terbaik)
+
+**Jika EfficientNetB0 menang:**
+> "Klasifikasi Tingkat Kesegaran Ikan Nila (Tilapia) Menggunakan EfficientNetB0 Berbasis Transfer Learning pada Aplikasi Web"
+
+**Jika MobileNetV2 menang:**
+> "Klasifikasi Tingkat Kesegaran Ikan Nila (Tilapia) Menggunakan MobileNetV2 Berbasis Transfer Learning pada Aplikasi Web"
+
+**Judul netral (untuk perbandingan):**
+> "Perbandingan MobileNetV2 dan EfficientNetB0 untuk Klasifikasi Kesegaran Ikan Nila (Tilapia) Berbasis Transfer Learning"
+
+---
+
+## ⚠️ Catatan Penting
+
+1. Selalu simpan model ke Google Drive setelah training agar tidak hilang
+2. Screenshot setiap hasil epoch untuk dokumentasi laporan
+3. Gunakan `preprocess_input` yang sesuai tiap model — jangan tertukar!
+4. Setelah dapat model terbaik, update file `app.py` di laptop dengan nama model baru
+5. Preprocessing di `app.py` harus sama persis dengan preprocessing saat training
+
+---
+
+*Brief ini dibuat untuk dieksekusi di Google Colab dengan GPU T4*  
+*Mata Kuliah Pengolahan Citra Digital — Tahun Ajaran Genap 2025/2026*
+
+
+1. Google Colab — Baru atau lama?
+Rekomendasi: Buat notebook BARU ✅
+Alasannya:
+
+Notebook lama sudah penuh dengan kode dataset sebelumnya — bisa membingungkan
+Proyek baru (tilapia) lebih rapi kalau di notebook terpisah
+Lebih mudah dilacak progressnya
+
+Caranya: Buka colab.research.google.com → klik "+ New Notebook"
+
+2. Dataset di Drive — Folder baru atau gabung yang lama?
+Buat folder BARU di Drive ✅
+Struktur Drive yang rapi:
+📁 MyDrive/
+    📁 proyek_ikan/          ← folder lama (biarkan)
+    📁 tilapia_project/      ← folder baru khusus tilapia
+        📁 data_tilapia/
+        📄 model_mobilenet_tilapia.keras
+        📄 model_efficientnet_tilapia_final.keras
+        📄 confusion_matrix_best.png
+        📄 perbandingan_model_tilapia.png
+Tidak mengganggu data lama sama sekali ✅
+
+3. API Kaggle — Perlu sambungkan ulang?
+Iya, perlu upload ulang ⚠️
+Karena notebook baru = environment baru. Tapi file kaggle.json sudah ada di laptop kamu, tinggal upload lagi saat diminta.
+Atau lebih praktis, simpan kaggle.json ke Google Drive sekarang:
+python# Jalankan ini sekali saja di notebook baru
+from google.colab import files
+files.upload()  # upload kaggle.json
+
+import shutil
+shutil.copy('kaggle.json', '/content/drive/MyDrive/tilapia_project/kaggle.json')
+print("✅ kaggle.json tersimpan ke Drive!")
+Nanti kalau Colab terputus, tidak perlu upload lagi — tinggal copy dari Drive:
+pythonimport shutil
+shutil.copy('/content/drive/MyDrive/tilapia_project/kaggle.json', '/root/.kaggle/kaggle.json')
+!chmod 600 /root/.kaggle/kaggle.json
+print("✅ Kaggle API siap!")
